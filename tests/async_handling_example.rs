@@ -1,12 +1,7 @@
-// Can you stream values
-// through memory as opposed to loading the entire data set upfront?
-
 use std::sync::{Arc, Mutex};
 
 use my_csv_parser::ledger::Ledger;
 
-// What if your code was bundled in a server, and these CSVs came from
-// thousands of concurrent TCP streams?
 #[tokio::test]
 #[ignore = "compilation only"]
 async fn test_shared_state_and_async_handling() {
