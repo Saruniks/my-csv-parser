@@ -1,4 +1,5 @@
-use std::{collections::HashMap, error::Error};
+use anyhow::{Context, Result};
+use std::collections::HashMap;
 
 use crate::types::{
     Centicents, ClientId, ClientState, Record, RecordType, TransactionId, TransactionInfo,
@@ -11,7 +12,7 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    pub fn process(&mut self, records: Vec<Record>) -> Result<(), Box<dyn Error>> {
+    pub fn process(&mut self, records: Vec<Record>) -> Result<()> {
         for record in records {
             let client_state = self
                 .clients_data
@@ -31,13 +32,13 @@ impl Ledger {
                                 record
                                     .amount
                                     .clone()
-                                    .ok_or("Amount is missing for the deposit")?,
+                                    .context("Amount is missing for the deposit")?,
                             )?,
                             is_disputed: false,
                         },
                     );
                     client_state.balances.available += Centicents::try_from(
-                        record.amount.ok_or("Amount is missing for the deposit")?,
+                        record.amount.context("Amount is missing for the deposit")?,
                     )?
                 }
                 RecordType::Withdrawal => {
@@ -48,7 +49,7 @@ impl Ledger {
                                 record
                                     .amount
                                     .clone()
-                                    .ok_or("Amount is missing for the withdrawal")?,
+                                    .context("Amount is missing for the withdrawal")?,
                             )?,
                             is_disputed: false,
                         },
@@ -58,7 +59,7 @@ impl Ledger {
                             record
                                 .amount
                                 .clone()
-                                .ok_or("Amount is missing for the withdrawal")?,
+                                .context("Amount is missing for the withdrawal")?,
                         )?
                         .0
                         >= 0
@@ -66,7 +67,7 @@ impl Ledger {
                         client_state.balances.available.0 -= Centicents::try_from(
                             record
                                 .amount
-                                .ok_or("Amount is missing for the withdrawal")?,
+                                .context("Amount is missing for the withdrawal")?,
                         )?
                         .0;
                     }

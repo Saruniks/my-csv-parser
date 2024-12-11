@@ -1,14 +1,14 @@
-use std::{env, error::Error};
-
+use anyhow::{bail, Result};
 use my_csv_parser::ledger::Ledger;
 use my_csv_parser::types::Record;
+use std::env;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args: Vec<_> = env::args().collect();
     let file_path = if let Some(file_path) = args.get(1) {
         file_path
     } else {
-        return Err("Missing argument".into());
+        bail!("Missing file path argument");
     };
 
     let mut reader = csv::ReaderBuilder::new()

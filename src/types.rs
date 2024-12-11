@@ -1,9 +1,9 @@
 use std::{
-    error::Error,
     fmt::Display,
     ops::{AddAssign, Sub},
 };
 
+use anyhow::{bail, Context, Error};
 use serde_derive::Deserialize;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -51,14 +51,14 @@ impl Sub for Centicents {
 
 // Better way to do it?
 impl TryFrom<String> for Centicents {
-    type Error = Box<dyn Error>;
+    type Error = Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let mut centicents = 0;
         let values: Vec<_> = value.split_terminator(".").collect();
 
         if values.len() > 2 {
-            return Err("Failed to parse centicents".into());
+            bail!("Failed to parse centicents");
         }
 
         if let Some(whole) = values.first() {
@@ -70,7 +70,7 @@ impl TryFrom<String> for Centicents {
                 if let Some(value) = fractional.chars().nth(index) {
                     let value = value
                         .to_digit(10)
-                        .ok_or("Failed to convert fraction to digit")?
+                        .context("Failed to convert fraction to digit")?
                         as i64; // Is this correct
                     centicents += value * multiplier;
                 } else {
