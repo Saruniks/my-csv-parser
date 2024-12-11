@@ -1,19 +1,14 @@
 use std::{
     fmt::Display,
-    ops::{AddAssign, Sub},
+    ops::{AddAssign, Sub, SubAssign},
+    str::FromStr,
 };
 
-use anyhow::{bail, Context, Error};
+use anyhow::{anyhow, bail, Context, Error};
 use serde_derive::Deserialize;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub struct ClientId(pub u16);
-
-#[derive(Default, Debug, Clone, PartialEq)]
-pub struct ClientState {
-    pub balances: Balances,
-    pub is_frozen: bool,
-}
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Balances {
@@ -21,23 +16,27 @@ pub struct Balances {
     pub held: Centicents,
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct TransactionId(pub u32);
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct ClientState {
+    pub balances: Balances,
+    pub is_frozen: bool,
+}
 
-// Should we save client_id and transaction type here for traceability
-// and to do extra checks?
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct TxId(pub u32);
+
 #[derive(Clone, PartialEq, Debug)]
-pub struct TransactionInfo {
+pub struct TxInfo {
     pub amount: Centicents,
     pub is_disputed: bool,
 }
 
-#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy, Default)]
 pub struct Centicents(pub i64);
 
 impl AddAssign for Centicents {
     fn add_assign(&mut self, rhs: Self) {
-        self.0 = self.0 + rhs.0;
+        self.0 += rhs.0;
     }
 }
 
@@ -49,48 +48,65 @@ impl Sub for Centicents {
     }
 }
 
-// Better way to do it?
-impl TryFrom<String> for Centicents {
-    type Error = Error;
+impl SubAssign for Centicents {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let mut centicents = 0;
-        let values: Vec<_> = value.split_terminator(".").collect();
+impl FromStr for Centicents {
+    type Err = Error;
 
-        if values.len() > 2 {
-            bail!("Failed to parse centicents");
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        if value.is_empty() {
+            bail!("Input is empty, cannot parse Centicents");
         }
 
-        if let Some(whole) = values.first() {
-            centicents += whole.parse::<i64>()? * 10000; // Try from...
+        let parts: Vec<&str> = value.split('.').collect();
+        if parts.len() > 2 {
+            bail!("Invalid format, multiple decimal points found in '{}'", value);
         }
-        if let Some(fractional) = values.get(1) {
-            let mut multiplier = 1000;
-            for index in 0..4 {
-                if let Some(value) = fractional.chars().nth(index) {
-                    let value = value
-                        .to_digit(10)
-                        .context("Failed to convert fraction to digit")?
-                        as i64; // Is this correct
-                    centicents += value * multiplier;
-                } else {
-                    break;
-                }
+
+        // Parse the whole part
+        let whole_str = parts[0];
+        if whole_str.is_empty() {
+            bail!("No whole part provided. For example, '.234' is invalid input");
+        }
+        let whole = whole_str
+            .parse::<i64>()
+            .with_context(|| format!("Failed to parse whole part '{}'", whole_str))?;
+
+        let mut centicents = whole * 10000;
+
+        // Parse the fractional part if it exists
+        if let Some(frac_str) = parts.get(1) {
+            let frac_str = frac_str.trim();
+            let frac_chars: Vec<char> = frac_str.chars().take(4).collect();
+
+            let mut multiplier = 1000; // For the first fractional digit
+            for ch in frac_chars {
+                let digit = ch
+                    .to_digit(10)
+                    .ok_or_else(|| anyhow!("Non-digit character '{}' in fractional part", ch))?;
+
+                centicents += (digit as i64) * multiplier;
                 multiplier /= 10;
             }
         }
+
         Ok(Centicents(centicents))
     }
 }
 
 impl Display for Centicents {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0 as f64 / 10000.0)?;
-        Ok(())
+        let value = self.0 as f64 / 10000.0;
+        write!(f, "{}", value)
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum RecordType {
     // Using alias would be more resilient?
@@ -111,94 +127,41 @@ pub struct Record {
     #[serde(rename = "client")]
     pub client_id: u16,
     #[serde(rename = "tx")]
-    pub transaction_id: u32,
+    pub tx_id: u32,
     pub amount: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_centicents_conversion() {
-        assert_eq!(
-            Centicents::try_from("1.2345".to_string()).unwrap(),
-            Centicents(12345)
-        );
-        assert_eq!(
-            Centicents::try_from("1.234".to_string()).unwrap(),
-            Centicents(12340)
-        );
-        assert_eq!(
-            Centicents::try_from("1.23".to_string()).unwrap(),
-            Centicents(12300)
-        );
-        assert_eq!(
-            Centicents::try_from("1.2".to_string()).unwrap(),
-            Centicents(12000)
-        );
-        assert_eq!(
-            Centicents::try_from("1".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.0".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.00".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.000".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.0000".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.00000".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.000000".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("1.0000000".to_string()).unwrap(),
-            Centicents(10000)
-        );
-        assert_eq!(
-            Centicents::try_from("2.0001".to_string()).unwrap(),
-            Centicents(20001)
-        );
-        assert_eq!(
-            Centicents::try_from("0.0001".to_string()).unwrap(),
-            Centicents(1)
-        );
-        assert_eq!(
-            Centicents::try_from("0.08".to_string()).unwrap(),
-            Centicents(800)
-        );
-        assert_eq!(
-            Centicents::try_from("0015".to_string()).unwrap(),
-            Centicents(150000)
-        );
-        assert_eq!(
-            Centicents::try_from("521321.0001".to_string()).unwrap(),
-            Centicents(5213210001)
-        );
+        assert_eq!(Centicents::from_str("1.2345").unwrap(), Centicents(12345));
+        assert_eq!(Centicents::from_str("1.234").unwrap(), Centicents(12340));
+        assert_eq!(Centicents::from_str("1.23").unwrap(), Centicents(12300));
+        assert_eq!(Centicents::from_str("1.2").unwrap(), Centicents(12000));
+        assert_eq!(Centicents::from_str("1").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.0").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.00").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.000").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.0000").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.00000").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.000000").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("1.0000000").unwrap(), Centicents(10000));
+        assert_eq!(Centicents::from_str("2.0001").unwrap(), Centicents(20001));
+        assert_eq!(Centicents::from_str("0.0001").unwrap(), Centicents(1));
+        assert_eq!(Centicents::from_str("0.08").unwrap(), Centicents(800));
+        assert_eq!(Centicents::from_str("0015").unwrap(), Centicents(150000));
+        assert_eq!(Centicents::from_str("521321.0001").unwrap(), Centicents(5213210001));
     }
 
     #[test]
     fn err_centicents_conversion() {
-        assert!(Centicents::try_from(".234".to_string()).is_err());
-        assert!(Centicents::try_from("5.234.555".to_string()).is_err());
-        assert!(Centicents::try_from("awbawd".to_string()).is_err());
+        assert!(Centicents::from_str(".234").is_err());
+        assert!(Centicents::from_str("5.234.555").is_err());
+        assert!(Centicents::from_str("awbawd").is_err());
     }
 }

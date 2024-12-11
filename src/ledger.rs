@@ -1,106 +1,74 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
-use crate::types::{
-    Centicents, ClientId, ClientState, Record, RecordType, TransactionId, TransactionInfo,
-};
+use crate::types::{Centicents, ClientId, ClientState, Record, RecordType, TxId, TxInfo};
 
 #[derive(Default, Clone)]
 pub struct Ledger {
-    transaction_data: HashMap<TransactionId, TransactionInfo>,
+    tx_data: HashMap<TxId, TxInfo>,
     clients_data: HashMap<ClientId, ClientState>,
 }
 
 impl Ledger {
     pub fn process(&mut self, records: Vec<Record>) -> Result<()> {
         for record in records {
-            let client_state = self
-                .clients_data
-                .entry(ClientId(record.client_id))
-                .or_default();
+            let client_state = self.clients_data.entry(ClientId(record.client_id)).or_default();
 
             if client_state.is_frozen {
-                return Ok(());
+                continue;
             }
 
             match record.record_type {
                 RecordType::Deposit => {
-                    self.transaction_data.insert(
-                        TransactionId(record.transaction_id),
-                        TransactionInfo {
-                            amount: Centicents::try_from(
-                                record
-                                    .amount
-                                    .clone()
-                                    .context("Amount is missing for the deposit")?,
-                            )?,
+                    let amount_str = record.amount.context("Amount is missing for the deposit")?;
+                    let amount = Centicents::from_str(&amount_str)?;
+
+                    self.tx_data.insert(
+                        TxId(record.tx_id),
+                        TxInfo {
+                            amount,
                             is_disputed: false,
                         },
                     );
-                    client_state.balances.available += Centicents::try_from(
-                        record.amount.context("Amount is missing for the deposit")?,
-                    )?
+                    client_state.balances.available += amount;
                 }
                 RecordType::Withdrawal => {
-                    self.transaction_data.insert(
-                        TransactionId(record.transaction_id),
-                        TransactionInfo {
-                            amount: Centicents::try_from(
-                                record
-                                    .amount
-                                    .clone()
-                                    .context("Amount is missing for the withdrawal")?,
-                            )?,
+                    let amount_str = record.amount.context("Amount is missing for the withdrawal")?;
+                    let amount = Centicents::from_str(&amount_str)?;
+
+                    self.tx_data.insert(
+                        TxId(record.tx_id),
+                        TxInfo {
+                            amount,
                             is_disputed: false,
                         },
                     );
-                    if client_state.balances.available.0
-                        - Centicents::try_from(
-                            record
-                                .amount
-                                .clone()
-                                .context("Amount is missing for the withdrawal")?,
-                        )?
-                        .0
-                        >= 0
-                    {
-                        client_state.balances.available.0 -= Centicents::try_from(
-                            record
-                                .amount
-                                .context("Amount is missing for the withdrawal")?,
-                        )?
-                        .0;
+
+                    // Only withdraw if there's sufficient available balance
+                    if client_state.balances.available.0 >= amount.0 {
+                        client_state.balances.available -= amount;
                     }
                 }
                 RecordType::Dispute => {
-                    if let Some(transaction_info) = self
-                        .transaction_data
-                        .get_mut(&TransactionId(record.transaction_id))
-                    {
-                        client_state.balances.available.0 -= transaction_info.amount.0;
-                        client_state.balances.held.0 += transaction_info.amount.0;
-                        transaction_info.is_disputed = true;
+                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
+                        client_state.balances.available -= tx_info.amount;
+                        client_state.balances.held += tx_info.amount;
+                        tx_info.is_disputed = true;
                     }
                 }
                 RecordType::Resolve => {
-                    if let Some(transaction_info) = self
-                        .transaction_data
-                        .get_mut(&TransactionId(record.transaction_id))
-                    {
-                        if transaction_info.is_disputed {
-                            client_state.balances.available.0 += transaction_info.amount.0;
-                            client_state.balances.held.0 -= transaction_info.amount.0;
-                            transaction_info.is_disputed = false;
+                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
+                        if tx_info.is_disputed {
+                            client_state.balances.available += tx_info.amount;
+                            client_state.balances.held -= tx_info.amount;
+                            tx_info.is_disputed = false;
                         }
                     }
                 }
                 RecordType::Chargeback => {
-                    if let Some(transaction_info) = self
-                        .transaction_data
-                        .get_mut(&TransactionId(record.transaction_id))
-                    {
+                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
                         client_state.is_frozen = true;
-                        client_state.balances.held.0 -= transaction_info.amount.0;
+                        client_state.balances.held -= tx_info.amount;
                     }
                 }
             }
@@ -108,15 +76,18 @@ impl Ledger {
         Ok(())
     }
 
+    /// Print the current state of all clients in CSV format.
     pub fn print(&self) {
         println!("client, available, held, total, locked");
         for (client, client_state) in self.clients_data.iter() {
+            let total_balance = client_state.balances.available - client_state.balances.held;
+
             println!(
                 "{}, {}, {}, {}, {}",
                 client.0,
                 client_state.balances.available,
                 client_state.balances.held,
-                client_state.balances.available.clone() - client_state.balances.held.clone(),
+                total_balance,
                 client_state.is_frozen
             );
         }
@@ -127,9 +98,8 @@ impl Ledger {
 mod tests {
     use common_macros::hash_map;
 
-    use crate::types::Balances;
-
     use super::*;
+    use crate::types::Balances;
 
     #[test]
     fn test_deposit() {
@@ -138,15 +108,15 @@ mod tests {
             .process(vec![Record {
                 record_type: RecordType::Deposit,
                 client_id: 0,
-                transaction_id: 0,
+                tx_id: 0,
                 amount: Some("10.5001".to_string()),
             }])
             .unwrap();
 
         assert_eq!(
-            ledger.transaction_data,
+            ledger.tx_data,
             hash_map! {
-                TransactionId(0) => TransactionInfo {
+                TxId(0) => TxInfo {
                     amount: Centicents(105_001),
                     is_disputed: false,
                 }
@@ -175,22 +145,22 @@ mod tests {
                 Record {
                     record_type: RecordType::Deposit,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: Some("10.5001".to_string()),
                 },
                 Record {
                     record_type: RecordType::Dispute,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
             ])
             .unwrap();
 
         assert_eq!(
-            ledger.transaction_data,
+            ledger.tx_data,
             hash_map! {
-                TransactionId(0) => TransactionInfo {
+                TxId(0) => TxInfo {
                     amount: Centicents(105_001),
                     is_disputed: true,
                 }
@@ -219,28 +189,28 @@ mod tests {
                 Record {
                     record_type: RecordType::Deposit,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: Some("10.5001".to_string()),
                 },
                 Record {
                     record_type: RecordType::Dispute,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
                 Record {
                     record_type: RecordType::Resolve,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
             ])
             .unwrap();
 
         assert_eq!(
-            ledger.transaction_data,
+            ledger.tx_data,
             hash_map! {
-                TransactionId(0) => TransactionInfo {
+                TxId(0) => TxInfo {
                     amount: Centicents(105_001),
                     is_disputed: false,
                 }
@@ -269,37 +239,37 @@ mod tests {
                 Record {
                     record_type: RecordType::Deposit,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: Some("10.5001".to_string()),
                 },
                 Record {
                     record_type: RecordType::Dispute,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
                 Record {
                     record_type: RecordType::Chargeback,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
-                // Even deposit is supposed to be no op at this point?
+                // Even deposit is supposed to be no-op at this point
                 Record {
                     record_type: RecordType::Deposit,
                     client_id: 0,
-                    transaction_id: 1,
+                    tx_id: 1,
                     amount: Some("100.5001".to_string()),
                 },
             ])
             .unwrap();
 
         assert_eq!(
-            ledger.transaction_data,
+            ledger.tx_data,
             hash_map! {
-                TransactionId(0) => TransactionInfo {
+                TxId(0) => TxInfo {
                     amount: Centicents(105_001),
-                    is_disputed: true, // should this be false after chargeback?
+                    is_disputed: true,
                 }
             }
         );
@@ -326,38 +296,38 @@ mod tests {
                 Record {
                     record_type: RecordType::Deposit,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: Some("10.5001".to_string()),
                 },
                 Record {
                     record_type: RecordType::Withdrawal,
                     client_id: 0,
-                    transaction_id: 1,
+                    tx_id: 1,
                     amount: Some("10.5001".to_string()),
                 },
                 Record {
                     record_type: RecordType::Dispute,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
                 Record {
                     record_type: RecordType::Chargeback,
                     client_id: 0,
-                    transaction_id: 0,
+                    tx_id: 0,
                     amount: None,
                 },
             ])
             .unwrap();
 
         assert_eq!(
-            ledger.transaction_data,
+            ledger.tx_data,
             hash_map! {
-                TransactionId(0) => TransactionInfo {
+                TxId(0) => TxInfo {
                     amount: Centicents(105_001),
-                    is_disputed: true, // should this be false after chargeback?
+                    is_disputed: true,
                 },
-                TransactionId(1) => TransactionInfo {
+                TxId(1) => TxInfo {
                     amount: Centicents(105_001),
                     is_disputed: false,
                 }

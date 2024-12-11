@@ -1,24 +1,25 @@
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
 use my_csv_parser::ledger::Ledger;
 use my_csv_parser::types::Record;
 use std::env;
 
-fn main() -> Result<()> {
+fn get_file_path() -> Result<String> {
     let args: Vec<_> = env::args().collect();
-    let file_path = if let Some(file_path) = args.get(1) {
-        file_path
-    } else {
-        bail!("Missing file path argument");
-    };
+    args.get(1).map(|s| s.to_string()).context("Missing file path argument")
+}
 
-    let mut reader = csv::ReaderBuilder::new()
-        .trim(csv::Trim::All)
-        .from_path(file_path)?;
+fn read_records(file_path: &str) -> Result<Vec<Record>> {
+    let mut reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_path(file_path)?;
 
-    let records: Vec<Record> = reader.deserialize().collect::<Result<_, _>>()?;
+    Ok(reader.deserialize().collect::<Result<_, _>>()?)
+}
+
+fn main() -> Result<()> {
+    let file_path = get_file_path()?;
+    let records = read_records(&file_path)?;
 
     let mut ledger = Ledger::default();
-    ledger.process(records).unwrap();
+    ledger.process(records)?;
     ledger.print();
 
     Ok(())

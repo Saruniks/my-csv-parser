@@ -31,6 +31,8 @@ fn test_cli_with_complex_input() {
 
     let stdout = String::from_utf8(output.stdout).expect("Not valid UTF-8");
 
+    println!("{}", stdout.clone());
+
     let test_case = [
         "client, available, held, total, locked",
         "1, 125, 0, 125, true",
