@@ -24,6 +24,8 @@ pub struct Balances {
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct TransactionId(pub u32);
 
+// Should we save client_id and transaction type here for traceability
+// and to do extra checks?
 #[derive(Clone, PartialEq, Debug)]
 pub struct TransactionInfo {
     pub amount: Centicents,

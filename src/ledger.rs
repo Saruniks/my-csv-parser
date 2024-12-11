@@ -86,9 +86,11 @@ impl Ledger {
                         .transaction_data
                         .get_mut(&TransactionId(record.transaction_id))
                     {
-                        client_state.balances.available.0 += transaction_info.amount.0;
-                        client_state.balances.held.0 -= transaction_info.amount.0;
-                        transaction_info.is_disputed = false;
+                        if transaction_info.is_disputed {
+                            client_state.balances.available.0 += transaction_info.amount.0;
+                            client_state.balances.held.0 -= transaction_info.amount.0;
+                            transaction_info.is_disputed = false;
+                        }
                     }
                 }
                 RecordType::Chargeback => {
@@ -106,8 +108,6 @@ impl Ledger {
     }
 
     pub fn print(&self) {
-        eprintln!("{:#?}", self.clients_data);
-
         println!("client, available, held, total, locked");
         for (client, client_state) in self.clients_data.iter() {
             println!(
