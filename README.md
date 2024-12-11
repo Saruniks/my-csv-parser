@@ -3,6 +3,7 @@
 ## What's Not Being Done:
 - Double-entry bookkeeping.
 - Multiple accounts per client (e.g., `EmoneyAccount` and `DisputeAccount`).
+- No duplicate transactions handling
 
 ## Safety and Robustness:
 - Risk of integer overflow (simpler implementation with a small risk).
