@@ -12,64 +12,68 @@ pub struct Ledger {
 impl Ledger {
     pub fn process(&mut self, records: Vec<Record>) -> Result<()> {
         for record in records {
-            let client_state = self.clients_data.entry(ClientId(record.client_id)).or_default();
+            self.process_record(record)?;
+        }
+        Ok(())
+    }
 
-            if client_state.is_frozen {
-                continue;
+    pub fn process_record(&mut self, record: Record) -> Result<()> {
+        let client_state = self.clients_data.entry(ClientId(record.client_id)).or_default();
+
+        if client_state.is_frozen {
+            return Ok(());
+        }
+
+        match record.record_type {
+            RecordType::Deposit => {
+                let amount_str = record.amount.context("Amount is missing for the deposit")?;
+                let amount = Centicents::from_str(&amount_str)?;
+
+                self.tx_data.insert(
+                    TxId(record.tx_id),
+                    TxInfo {
+                        amount,
+                        is_disputed: false,
+                    },
+                );
+                client_state.balances.available += amount;
             }
+            RecordType::Withdrawal => {
+                let amount_str = record.amount.context("Amount is missing for the withdrawal")?;
+                let amount = Centicents::from_str(&amount_str)?;
 
-            match record.record_type {
-                RecordType::Deposit => {
-                    let amount_str = record.amount.context("Amount is missing for the deposit")?;
-                    let amount = Centicents::from_str(&amount_str)?;
+                self.tx_data.insert(
+                    TxId(record.tx_id),
+                    TxInfo {
+                        amount,
+                        is_disputed: false,
+                    },
+                );
 
-                    self.tx_data.insert(
-                        TxId(record.tx_id),
-                        TxInfo {
-                            amount,
-                            is_disputed: false,
-                        },
-                    );
-                    client_state.balances.available += amount;
+                if client_state.balances.available.0 >= amount.0 {
+                    client_state.balances.available -= amount;
                 }
-                RecordType::Withdrawal => {
-                    let amount_str = record.amount.context("Amount is missing for the withdrawal")?;
-                    let amount = Centicents::from_str(&amount_str)?;
-
-                    self.tx_data.insert(
-                        TxId(record.tx_id),
-                        TxInfo {
-                            amount,
-                            is_disputed: false,
-                        },
-                    );
-
-                    // Only withdraw if there's sufficient available balance
-                    if client_state.balances.available.0 >= amount.0 {
-                        client_state.balances.available -= amount;
-                    }
+            }
+            RecordType::Dispute => {
+                if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
+                    client_state.balances.available -= tx_info.amount;
+                    client_state.balances.held += tx_info.amount;
+                    tx_info.is_disputed = true;
                 }
-                RecordType::Dispute => {
-                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
-                        client_state.balances.available -= tx_info.amount;
-                        client_state.balances.held += tx_info.amount;
-                        tx_info.is_disputed = true;
-                    }
-                }
-                RecordType::Resolve => {
-                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
-                        if tx_info.is_disputed {
-                            client_state.balances.available += tx_info.amount;
-                            client_state.balances.held -= tx_info.amount;
-                            tx_info.is_disputed = false;
-                        }
-                    }
-                }
-                RecordType::Chargeback => {
-                    if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
-                        client_state.is_frozen = true;
+            }
+            RecordType::Resolve => {
+                if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
+                    if tx_info.is_disputed {
+                        client_state.balances.available += tx_info.amount;
                         client_state.balances.held -= tx_info.amount;
+                        tx_info.is_disputed = false;
                     }
+                }
+            }
+            RecordType::Chargeback => {
+                if let Some(tx_info) = self.tx_data.get_mut(&TxId(record.tx_id)) {
+                    client_state.is_frozen = true;
+                    client_state.balances.held -= tx_info.amount;
                 }
             }
         }
