@@ -7,7 +7,7 @@
 - No Fine-Grained Locking with Internal Mutexes
 
 ## Safety and Robustness:
-- Risk of integer overflow (simpler implementation with a small risk)
+- Risk of integer overflow (implementation simplicity vs risk)
 
 ### How to Run
 ```bash
