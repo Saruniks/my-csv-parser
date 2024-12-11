@@ -61,7 +61,7 @@ impl Ledger {
                                 .ok_or("Amount is missing for the withdrawal")?,
                         )?
                         .0
-                        > 0
+                        >= 0
                     {
                         client_state.balances.available.0 -= Centicents::try_from(
                             record
@@ -98,7 +98,6 @@ impl Ledger {
                     {
                         client_state.is_frozen = true;
                         client_state.balances.held.0 -= transaction_info.amount.0;
-                        client_state.balances.available.0 -= transaction_info.amount.0;
                     }
                 }
             }
