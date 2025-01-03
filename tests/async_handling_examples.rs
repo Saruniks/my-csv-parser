@@ -30,7 +30,7 @@ async fn test_shared_state_and_async_handling() {
 #[tokio::test]
 #[ignore = "compilation only"]
 async fn test_streamed_concurrent_handling() {
-    // Running concurrent streams different chronology requirements are needed:
+    // For running concurrent streams different chronology requirements are needed:
     // single file (file-scope) vs across multiple files (inter-file).
     let files = vec!["transactions.csv", "transactions_complex.csv"];
 
